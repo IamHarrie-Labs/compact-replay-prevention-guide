@@ -1,0 +1,55 @@
+// nullifier.compact
+// Demonstrates set-based nullifier replay prevention using persistentCommit.
+//
+// persistentCommit<T>(v: T, opening: Bytes<32>): Bytes<32>
+//   v       = voter's private secret (binding: can't change after committing)
+//   opening = context/domain string (provides per-campaign scope)
+//
+// The nullifier is derived as persistentCommit(secret, context).
+// Same secret + different context = different nullifier (cross-campaign safe).
+// Same secret + same context = same nullifier (detects within-campaign replay).
+
+pragma language_version >= 0.20;
+import CompactStandardLibrary;
+
+// ─── On-chain state ────────────────────────────────────────────────────────
+
+// Spent nullifiers — Map<Bytes<32>, Boolean> is Compact's set pattern
+// (Compact has no dedicated Set type)
+export ledger spentNullifiers: Map<Bytes<32>, Boolean>;
+
+// Claim counter
+export ledger totalClaims: Counter;
+
+// ─── Witnesses ─────────────────────────────────────────────────────────────
+
+// Private secret — never appears on-chain
+witness getSecret(): Bytes<32>;
+
+// ─── Circuit ───────────────────────────────────────────────────────────────
+
+// Claim a reward exactly once per (secret, context) pair.
+//
+// context: a public domain string identifying this campaign/round.
+//          Example: pad(32, "airdrop:season-1:v1")
+//          Changing context allows the same secret to claim in future campaigns.
+export circuit claimReward(context: Bytes<32>): [] {
+    const secret = getSecret();
+
+    // Derive nullifier: persistentCommit(secret, context)
+    //   - binding: nullifier is unique to this secret
+    //   - context scopes it to this campaign — same secret works in other campaigns
+    const nullifier = persistentCommit<Bytes<32>>(secret, disclose(context));
+
+    // Replay check — nullifier must not have been spent
+    assert(
+        !spentNullifiers.member(disclose(nullifier)),
+        "Nullifier already spent: reward already claimed"
+    );
+
+    // Mark nullifier spent BEFORE side effects — always record first
+    spentNullifiers.insert(disclose(nullifier), disclose(true));
+
+    // Side effect: increment claim count
+    totalClaims.increment(1);
+}

@@ -1,0 +1,78 @@
+// domain-separation.compact
+// Demonstrates domain separation tags to prevent cross-operation replay.
+//
+// Problem: without domain tags, a proof valid for circuit A (castVote) could
+// potentially satisfy circuit B (delegateVote) if both hash the same inputs.
+// Domain tags cryptographically isolate each operation's hash space.
+//
+// Pattern: persistentHash<Vector<3, Bytes<32>>>([pad(32, "contract:op:v1"), data...])
+//   - pad(32, "tag") produces a fixed 32-byte prefix unique to this operation
+//   - Even with identical data, different tags produce different hashes
+
+pragma language_version >= 0.20;
+import CompactStandardLibrary;
+
+// ─── On-chain state ────────────────────────────────────────────────────────
+
+// Separate nullifier sets per operation — domain-tagged nullifiers can't cross
+export ledger voteNullifiers: Map<Bytes<32>, Boolean>;
+export ledger delegateNullifiers: Map<Bytes<32>, Boolean>;
+
+export ledger totalVotes: Counter;
+export ledger totalDelegations: Counter;
+
+// ─── Witnesses ─────────────────────────────────────────────────────────────
+
+witness getVoterSecret(): Bytes<32>;
+
+// ─── Helper circuits ───────────────────────────────────────────────────────
+
+// Derive a vote nullifier — domain tag "gov:vote:v1"
+circuit voteNullifier(secret: Bytes<32>, proposalId: Bytes<32>): Bytes<32> {
+    return persistentHash<Vector<3, Bytes<32>>>([
+        pad(32, "gov:vote:v1"),    // ← operation-specific domain tag
+        secret,
+        proposalId
+    ]);
+}
+
+// Derive a delegation nullifier — domain tag "gov:delegate:v1"
+// Same (secret, proposalId) inputs → DIFFERENT hash output due to different tag
+circuit delegateNullifier(secret: Bytes<32>, proposalId: Bytes<32>): Bytes<32> {
+    return persistentHash<Vector<3, Bytes<32>>>([
+        pad(32, "gov:delegate:v1"), // ← different tag = different hash space
+        secret,
+        proposalId
+    ]);
+}
+
+// ─── Export circuits ───────────────────────────────────────────────────────
+
+// Cast a vote — uses "gov:vote:v1" domain tag
+// A proof for this circuit cannot satisfy delegateVote (different tag)
+export circuit castVote(proposalId: Bytes<32>): [] {
+    const secret = getVoterSecret();
+    const nullifier = voteNullifier(secret, disclose(proposalId));
+
+    assert(
+        !voteNullifiers.member(disclose(nullifier)),
+        "Vote already cast for this proposal"
+    );
+    voteNullifiers.insert(disclose(nullifier), disclose(true));
+    totalVotes.increment(1);
+}
+
+// Delegate a vote — uses "gov:delegate:v1" domain tag
+// The same voter can both vote and delegate on the same proposal
+// without cross-operation replay — domain tags ensure the nullifiers differ
+export circuit delegateVote(proposalId: Bytes<32>): [] {
+    const secret = getVoterSecret();
+    const nullifier = delegateNullifier(secret, disclose(proposalId));
+
+    assert(
+        !delegateNullifiers.member(disclose(nullifier)),
+        "Already delegated for this proposal"
+    );
+    delegateNullifiers.insert(disclose(nullifier), disclose(true));
+    totalDelegations.increment(1);
+}

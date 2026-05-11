@@ -1,0 +1,50 @@
+name: Compile Compact Contracts
+
+on:
+  push:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Compact toolchain manager
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf \
+            https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.compact/bin" >> $GITHUB_PATH
+
+      - name: Download latest compiler version
+        run: |
+          export PATH="$HOME/.compact/bin:$PATH"
+          compact update
+          compact --version
+          compact compile --version || true
+
+      - name: Compile counter-nonce.compact
+        run: |
+          mkdir -p out/counter-nonce
+          compact compile counter-nonce.compact out/counter-nonce
+          echo "✅ counter-nonce.compact compiled successfully"
+
+      - name: Compile nullifier.compact
+        run: |
+          mkdir -p out/nullifier
+          compact compile nullifier.compact out/nullifier
+          echo "✅ nullifier.compact compiled successfully"
+
+      - name: Compile domain-separation.compact
+        run: |
+          mkdir -p out/domain-separation
+          compact compile domain-separation.compact out/domain-separation
+          echo "✅ domain-separation.compact compiled successfully"
+
+      - name: Upload compilation output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-contracts
+          path: out/

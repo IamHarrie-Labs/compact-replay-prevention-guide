@@ -1,0 +1,56 @@
+// counter-nonce.compact
+// Demonstrates counter-based nonce replay prevention in Compact.
+// Each operation consumes the current nonce value; the caller must supply
+// a strictly greater newNonce for subsequent calls.
+//
+// NOTE: Compact's range-typed arithmetic means Uint<64> + 1 produces a
+// wider type than Uint<64>. The increment is passed from off-chain TypeScript
+// rather than computed in-circuit.
+
+pragma language_version >= 0.20;
+import CompactStandardLibrary;
+
+// ─── On-chain state ────────────────────────────────────────────────────────
+
+// Per-user nonce — maps each user's public key to their next expected nonce
+export ledger userNonces: Map<Bytes<32>, Uint<64>>;
+
+// Global operation count for audit
+export ledger operationCount: Counter;
+
+// ─── Witnesses ─────────────────────────────────────────────────────────────
+
+witness getUserKey(): Bytes<32>;
+
+// ─── Circuits ──────────────────────────────────────────────────────────────
+
+// Perform an operation with counter-based replay prevention.
+//
+// userKey:    the caller's public identity
+// nonce:      must equal the stored nonce for this user (or 0 on first call)
+// nextNonce:  the value to store as the next expected nonce (computed off-chain)
+//             must be strictly greater than nonce to enforce monotonic ordering
+export circuit operate(
+    userKey: Bytes<32>,
+    nonce: Uint<64>,
+    nextNonce: Uint<64>
+): [] {
+    // Validate the current nonce
+    if (!userNonces.member(disclose(userKey))) {
+        // First operation: must use nonce 0
+        assert(disclose(nonce) == 0, "First operation must use nonce 0");
+    } else {
+        assert(
+            disclose(nonce) == userNonces.lookup(disclose(userKey)),
+            "Invalid nonce — replay or out-of-order submission"
+        );
+    }
+
+    // Next nonce must be strictly greater (monotonic, off-chain enforced to nonce+1)
+    assert(disclose(nextNonce) > disclose(nonce), "nextNonce must exceed current nonce");
+
+    // Advance the nonce — prevents reuse of this nonce value
+    userNonces.insert(disclose(userKey), disclose(nextNonce));
+
+    operationCount.increment(1);
+}
