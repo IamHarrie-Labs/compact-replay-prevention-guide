@@ -1,0 +1,95 @@
+// governance.compact
+// Combined example: counter nonces + set-based nullifiers + domain separation.
+// Demonstrates layering all three replay prevention mechanisms in one contract.
+
+pragma language_version >= 0.20;
+import CompactStandardLibrary;
+
+// ─── Phase state ──────────────────────────────────────────────────────────
+
+export ledger proposalOpen: Boolean;
+export ledger proposalId: Bytes<32>;
+
+// ─── Counter nonces for proposal submission ────────────────────────────────
+
+export ledger submitterNonces: Map<Bytes<32>, Uint<64>>;
+export ledger proposalCount: Counter;
+
+// ─── Nullifier set for anonymous voting ────────────────────────────────────
+
+// Map<Bytes<32>, Boolean> is Compact's set pattern
+export ledger voteNullifiers: Map<Bytes<32>, Boolean>;
+export ledger yesVotes: Counter;
+export ledger noVotes: Counter;
+
+// ─── Witnesses ─────────────────────────────────────────────────────────────
+
+witness getVoterSecret(): Bytes<32>;
+
+// ─── Helper: domain-separated vote nullifier ───────────────────────────────
+
+// Tag "dao:vote:v1" isolates vote hashes from any other operation in the system
+circuit computeVoteNullifier(
+    secret: Bytes<32>,
+    proposal: Bytes<32>
+): Bytes<32> {
+    return persistentHash<Vector<3, Bytes<32>>>([
+        pad(32, "dao:vote:v1"),
+        secret,
+        proposal
+    ]);
+}
+
+// ─── Circuits ──────────────────────────────────────────────────────────────
+
+// Submit a proposal — identity-bound, nonce-protected sequential operation
+export circuit submitProposal(
+    submitterKey: Bytes<32>,
+    nonce: Uint<64>,
+    nextNonce: Uint<64>,
+    content: Bytes<32>
+): [] {
+    assert(!proposalOpen, "Proposal already open");
+
+    // Counter nonce: verify current and advance
+    if (!submitterNonces.member(disclose(submitterKey))) {
+        assert(disclose(nonce) == 0, "First submission must use nonce 0");
+    } else {
+        assert(
+            disclose(nonce) == submitterNonces.lookup(disclose(submitterKey)),
+            "Invalid nonce"
+        );
+    }
+    assert(disclose(nextNonce) > disclose(nonce), "nextNonce must increase");
+    submitterNonces.insert(disclose(submitterKey), disclose(nextNonce));
+
+    proposalId = disclose(content);
+    proposalOpen = disclose(true);
+    proposalCount.increment(1);
+}
+
+// Cast a vote — anonymous, nullifier-protected, domain-separated
+export circuit castVote(vote: Uint<8>): [] {
+    assert(proposalOpen, "No open proposal");
+
+    const secret = getVoterSecret();
+    // Domain-separated nullifier scoped to this proposal — prevents cross-proposal replay
+    const nullifier = computeVoteNullifier(secret, proposalId);
+
+    // Record nullifier before side effects
+    assert(!voteNullifiers.member(disclose(nullifier)), "Already voted on this proposal");
+    voteNullifiers.insert(disclose(nullifier), disclose(true));
+
+    // vote is exported parameter — disclose() required before branching with ledger ops
+    if (disclose(vote) == 1) {
+        yesVotes.increment(1);
+    } else {
+        noVotes.increment(1);
+    }
+}
+
+// Close proposal — permissioned in a real contract; simplified here
+export circuit closeProposal(): [] {
+    assert(proposalOpen, "No open proposal");
+    proposalOpen = disclose(false);
+}

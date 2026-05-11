@@ -42,6 +42,12 @@ jobs:
           compact compile domain-separation.compact out/domain-separation
           echo "✅ domain-separation.compact compiled successfully"
 
+      - name: Compile governance.compact
+        run: |
+          mkdir -p out/governance
+          compact compile governance.compact out/governance
+          echo "✅ governance.compact compiled successfully"
+
       - name: Upload compilation output
         if: always()
         uses: actions/upload-artifact@v4
